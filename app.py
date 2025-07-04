@@ -35,7 +35,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
 # ---------------------------------------
 # App Configuration
 # ---------------------------------------
-AWS_REGION_NAME = os.environ.get('AWS_REGION_NAME', 'ap-south-1')
+AWS_REGION_NAME = os.environ.get('AWS_REGION_NAME', 'us-east-1')
 
 
 # Email Configuration
