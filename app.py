@@ -240,9 +240,9 @@ def signup(role):
         user_id = str(uuid.uuid4())
         hashed_password = generate_password_hash(password)
         user_data = {
+            'email': email,
             'user_id': user_id,
             'name': name,
-            'email': email,
             'password_hash': hashed_password,
             'role': role,
             'created_at': datetime.now().isoformat(),
