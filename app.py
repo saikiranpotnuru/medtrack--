@@ -12,6 +12,7 @@ from functools import wraps
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from boto3.dynamodb.conditions import Attr
 
 
 # ---------------------------------------
@@ -78,7 +79,7 @@ login_attempts = {}
 # ---------------------------------------
 
 # AWS region and environment setup
-AWS_REGION_NAME = os.environ.get('AWS_REGION_NAME', 'ap-south-1')
+# AWS_REGION_NAME = os.environ.get('AWS_REGION_NAME', 'ap-south-1')
 try:
     # Use local DynamoDB for development if AWS credentials not available
     if os.environ.get('AWS_ACCESS_KEY_ID'):
@@ -100,14 +101,14 @@ except Exception as e:
 # ---------------------------------------
 
 # In-memory "tables" to simulate DynamoDB
-local_db = {
-    'users': {},
-    'doctors': {},
-    'patients': {},
-    'appointments': [],
-    'diagnosis': [],
-    'notifications': []
-}
+# local_db = {
+#     'users': {},
+#     'doctors': {},
+#     'patients': {},
+#     'appointments': [],
+#     'diagnosis': [],
+#     'notifications': []
+# }
 
 # ---------------------------------------
 # Database Helper Functions for MedTrack
@@ -188,6 +189,7 @@ def send_email_notification(to_email, subject, body):
         logger.error(f"Failed to send email: {e}")
         return False
 
+
 def send_sns_notification(message):
     if not ENABLE_SNS or not sns or not SNS_TOPIC_ARN:
         logger.info(f"SNS notification would be sent: {message}")
@@ -222,15 +224,17 @@ def signup(role):
 
         # Check if user already exists
         if dynamodb:
-            user_table = get_user_table()
+            user_table = get_users_table()
             response = user_table.get_item(Key={'email': email})
             if 'Item' in response:
                 flash('User already exists.', 'danger')
                 return render_template('signup.html', role=role)
         else:
-            if email in local_db['users']:
-                flash('User already exists.', 'danger')
-                return render_template('signup.html', role=role)
+            #if email in local_db['users']:
+                #flash('User already exists.', 'danger')
+                #return render_template('signup.html', role=role)
+            flash('User already exists.', 'danger')
+            return render_template('signup.html', role=role)
 
         # Create user
         user_id = str(uuid.uuid4())
@@ -248,7 +252,10 @@ def signup(role):
         if dynamodb:
             user_table.put_item(Item=user_data)
         else:
-            local_db['users'][email] = user_data
+            #local_db['users'][email] = user_data
+            flash('DynamoDB is required for production. Please enable it.', 'danger')
+            return render_template('signup.html', role=role)
+
 
         flash('Signup successful! Please log in.', 'success')
         return redirect(url_for('login', role=role))
@@ -285,7 +292,7 @@ def login(role):
         # Fetch user data
         user_data = None
         if dynamodb:
-            user_table = get_user_table()
+            user_table = get_users_table()
             try:
                 response = user_table.get_item(Key={'email': email})
                 if 'Item' in response:
@@ -293,7 +300,10 @@ def login(role):
             except Exception as e:
                 logger.error(f"Error fetching user from DynamoDB: {e}")
         else:
-            user_data = local_db['users'].get(email)
+            #user_data = local_db['users'].get(email)
+            flash('DynamoDB is required for production. Please enable it.', 'danger')
+            return render_template('login.html', role=role)
+
 
         # Validate user
         if not user_data or user_data.get('role') != role:
@@ -360,7 +370,7 @@ def logout():
 
 # ...existing code...
 
-def get_patient_dashboard_data(user_email):
+""" def get_patient_dashboard_data(user_email):
     # Fetch patient stats from local_db (or DynamoDB if enabled)
     user = local_db['users'].get(user_email)
     # Example stats (replace with real queries as needed)
@@ -416,9 +426,57 @@ def get_patient_dashboard_data(user_email):
         'appointments': appointments,
         'health_score': health_score,
         'prescriptions_list': prescriptions_list,
-    }
+    } """
 
-def get_doctor_dashboard_data(user_email):
+def get_patient_dashboard_data(user_email):
+    if dynamodb:
+        user_table = get_users_table()
+        appointments_table = get_appointments_table()
+        response = user_table.get_item(Key={'email': user_email})
+        user = response.get('Item', {})
+        active_medications = user.get('active_medications', 5)
+        response = appointments_table.scan(FilterExpression=Attr('patient').eq(user_email))
+        appointments = response.get('Items', [])
+        upcoming_appointments = [a for a in appointments if a.get('patient') == user_email]
+        prescriptions = user.get('prescriptions', 4)
+        health_score = user.get('health_score', 85)
+        notifications = [
+            {
+                'icon': 'fa-calendar-check',
+                'title': 'Upcoming Appointment',
+                'text': 'You have an appointment tomorrow.',
+                'time': '2 hours ago',
+                'unread': True
+            }
+        ]
+        messages = [
+            {
+                'sender': 'Dr. Smith',
+                'time': 'Yesterday',
+                'preview': 'Your test results are ready.',
+                'unread': True
+            }
+        ]
+        prescriptions_list = user.get('prescriptions_list', [])
+        return {
+            'name': user.get('name'),
+            'role': user.get('role'),
+            'notifications': notifications,
+            'messages': messages,
+            'active_medications': active_medications,
+            'upcoming_appointments': len(upcoming_appointments),
+            'next_appointment': upcoming_appointments[0] if upcoming_appointments else None,
+            'prescriptions': prescriptions,
+            'appointments': appointments,
+            'health_score': health_score,
+            'prescriptions_list': prescriptions_list,
+        }
+    else:
+        flash('DynamoDB is required for production. Please enable it.', 'danger')
+        return {}
+    
+
+"""def get_doctor_dashboard_data(user_email):
     user = local_db['users'].get(user_email)
     # Example: get all patients assigned to this doctor
     patient_emails = list(user.get('patients', []))
@@ -632,20 +690,111 @@ def get_doctor_dashboard_data(user_email):
         'notifications': notifications,
         'video_call_patient_name': 'John Doe',  # Or set dynamically based on context
 
-    }
+    }"""
     
+
+def get_doctor_dashboard_data(user_email):
+    if dynamodb:
+        user_table = get_users_table()
+        appointments_table = get_appointments_table()
+        # Fetch doctor user info
+        response = user_table.get_item(Key={'email': user_email})
+        user = response.get('Item', {})
+        # Get all patients assigned to this doctor
+        patient_emails = list(user.get('patients', []))
+        patients = []
+        for email in patient_emails:
+            resp = user_table.get_item(Key={'email': email})
+            if 'Item' in resp:
+                patients.append(resp['Item'])
+        # Get all appointments for this doctor
+        response = appointments_table.scan(FilterExpression=Attr('doctor').eq(user_email))
+        appointments = response.get('Items', [])
+        # Appointments for today
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        todays_appointments = [a for a in appointments if a.get('date') == today_str]
+        next_appointment = todays_appointments[0] if todays_appointments else None
+
+        # Example: notifications and messages (static or extend as needed)
+        notifications = [
+            {
+                'icon': 'fa-calendar-check',
+                'title': 'Upcoming Appointment',
+                'text': 'You have an appointment today.',
+                'time': '30 minutes ago',
+                'unread': True
+            }
+        ]
+        messages = [
+            {
+                'sender': 'John Doe',
+                'time': '10:30 AM',
+                'preview': 'Hello Dr., I wanted to ask about my recent blood work results...',
+                'unread': True
+            }
+        ]
+
+        # Example analytics (replace with real calculations as needed)
+        analytics = {
+            'patient_visits': {
+                'total': len(patients),
+                'new': 5,
+                'avg_daily': 2.5
+            },
+            'appointment_types': [
+                {'label': 'Follow-ups', 'value': 10},
+                {'label': 'New Patients', 'value': 3},
+                {'label': 'Consultations', 'value': 7}
+            ],
+            'patient_satisfaction': 92,
+            'treatment_outcomes': 87
+        }
+
+
+        return {
+            'name': user.get('name'),
+            'role': user.get('role'),
+            'specialization': user.get('specialization', 'Doctor'),
+            'email': user.get('email'),
+            'total_patients': len(patients),
+            'patients': patients,
+            'appointments': appointments,
+            'patients_new_this_month': 8,  # Example static value
+            'todays_appointments': len(todays_appointments),
+            'next_appointment': next_appointment,
+            'analytics': analytics,
+            'messages': messages,
+            'notifications': notifications,
+            'avatar_url': user.get('avatar_url', 'https://randomuser.me/api/portraits/women/65.jpg'),
+            'phone': user.get('phone', '+1 (555) 789-0123'),
+            'hospital': user.get('hospital', 'City Medical Center'),
+            'experience': user.get('experience', 12),
+            'about': user.get('about', 'Dr. ' + user.get('name', '') + ' is a board-certified ' + user.get('specialization', '') + '.'),
+            'specialties': user.get('specialties', [
+                'Diabetes Management',
+                'Thyroid Disorders',
+                'Adrenal Disorders',
+                'Pituitary Disorders',
+                'Metabolic Disorders'
+            ]),
+            'languages': user.get('languages', ['English (Native)', 'Spanish (Fluent)', 'French (Basic)']),
+        }
+    else:
+        flash('DynamoDB is required for production. Please enable it.', 'danger')
+        return {}
+
 
 @app.route('/patient_dashboard')
 @login_required(role='patient')
 def patient_dashboard():
     user_email = session['user']
     dashboard_data = get_patient_dashboard_data(user_email)
-    doctors = [
-        {'email': 'drsmith@example.com', 'name': 'Dr. Smith'},
-        {'email': 'drjohnson@example.com', 'name': 'Dr. Johnson'},
-        {'email': 'saikiran@gmail.com', 'name': 'Dr. Sai'},
-        # ... more doctors ...
-    ]
+    doctors = []
+    if dynamodb:
+        user_table = get_users_table()
+        response = user_table.scan(FilterExpression=Attr('role').eq('doctor'))
+        doctors = [{'email': u['email'], 'name': u['name']} for u in response.get('Items', [])]
+
     return render_template('patient_dashboard.html', **dashboard_data, doctors=doctors)
 
 @app.route('/doctor_dashboard')
@@ -669,26 +818,33 @@ def book_appointment():
         title = request.form.get('title', 'Consultation')
         location = request.form.get('location', 'Office 203')
         color = request.form.get('color', '#3498db')
-
-        # Get doctor and patient names from local_db
-        doctor_name = local_db['users'].get(doctor_email, {}).get('name', 'Doctor')
-        patient_email = session['user']
-        patient_name = local_db['users'].get(patient_email, {}).get('name', 'Patient')
-
-        appointment = {
-            'patient': patient_email,
-            'patient_name': patient_name,
-            'doctor': doctor_email,
-            'doctor_name': doctor_name,
-            'title': title,
-            'date': date,
-            'time': time,
-            'location': location,
-            'color': color
-        }
-        local_db['appointments'].append(appointment)
-        flash('Appointment booked successfully!', 'success')
-        return redirect(url_for('patient_dashboard'))
+        if dynamodb:
+            user_table = get_users_table()
+            appointments_table = get_appointments_table()
+            doctor_resp = user_table.get_item(Key={'email': doctor_email})
+            doctor_name = doctor_resp.get('Item', {}).get('name', 'Doctor')
+            patient_email = session['user']
+            patient_resp = user_table.get_item(Key={'email': patient_email})
+            patient_name = patient_resp.get('Item', {}).get('name', 'Patient')
+            appointment_id = str(uuid.uuid4())
+            appointment = {
+                'appointment_id': appointment_id,
+                'patient': patient_email,
+                'patient_name': patient_name,
+                'doctor': doctor_email,
+                'doctor_name': doctor_name,
+                'title': title,
+                'date': date,
+                'time': time,
+                'location': location,
+                'color': color
+            }
+            appointments_table.put_item(Item=appointment)
+            flash('Appointment booked successfully!', 'success')
+            return redirect(url_for('patient_dashboard'))
+        else:
+            flash('DynamoDB is required for production. Please enable it.', 'danger')
+            return render_template('book_appointment.html', user_name=session['name'])
     return render_template('book_appointment.html', user_name=session['name'])
 
 
@@ -699,35 +855,45 @@ def add_patient():
     doctor_email = session['user']
     patient_email = request.form['patient_email']
     patient_name = request.form['patient_name']
-
-    # Add patient to doctor's patient list
-    doctor = local_db['users'].get(doctor_email)
-    if doctor:
-        doctor.setdefault('patients', set()).add(patient_email)
-
-    # Optionally, add doctor to patient's record
-    patient = local_db['users'].get(patient_email)
-    if patient:
-        patient.setdefault('doctors', set()).add(doctor_email)
+    if dynamodb:
+        user_table = get_users_table()
+        # Add patient to doctor's patient list
+        doctor_resp = user_table.get_item(Key={'email': doctor_email})
+        doctor = doctor_resp.get('Item', {})
+        patients = set(doctor.get('patients', []))
+        patients.add(patient_email)
+        doctor['patients'] = list(patients)
+        user_table.put_item(Item=doctor)
+        # Optionally, add doctor to patient's record
+        patient_resp = user_table.get_item(Key={'email': patient_email})
+        patient = patient_resp.get('Item')
+        if patient:
+            doctors = set(patient.get('doctors', []))
+            doctors.add(doctor_email)
+            patient['doctors'] = list(doctors)
+            user_table.put_item(Item=patient)
+        else:
+            # Optionally create a new patient record if not exists
+            new_patient = {
+                'name': patient_name,
+                'email': patient_email,
+                'role': 'patient',
+                'doctors': [doctor_email],
+                'user_id': str(uuid.uuid4()),
+                'created_at': datetime.now().isoformat(),
+                'is_active': True
+            }
+            user_table.put_item(Item=new_patient)
+        flash('Patient added successfully!', 'success')
+        return redirect(url_for('doctor_dashboard'))
     else:
-        # Optionally create a new patient record if not exists
-        local_db['users'][patient_email] = {
-            'name': patient_name,
-            'email': patient_email,
-            'role': 'patient',
-            'doctors': {doctor_email}
-        }
-
-    flash('Patient added successfully!', 'success')
-    return redirect(url_for('doctor_dashboard'))
+        flash('DynamoDB is required for production. Please enable it.', 'danger')
+        return redirect(url_for('doctor_dashboard'))
 
 
+# dynamodb = False   
 
-dynamodb = False  # Simulate DynamoDB off (toggle for actual integration)
 
-def get_user_table():
-    # Placeholder for actual DynamoDB logic
-    return None
 
 # Route: Select role
 @app.route('/')
