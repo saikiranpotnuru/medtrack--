@@ -889,7 +889,7 @@ def add_patient():
     else:
         flash('DynamoDB is required for production. Please enable it.', 'danger')
         return redirect(url_for('doctor_dashboard'))
-
+        app.run(host='0.0.0.0', port=5000, debug=True)
 
 # dynamodb = False   
 
@@ -899,6 +899,7 @@ def add_patient():
 @app.route('/')
 def index():
     return render_template('index.html')
+    
 
 
 
